@@ -1,0 +1,12 @@
+[theme]
+# 파스텔 톤 — 회색보다 눈에 띄면서 눈의 피로가 적도록
+primaryColor = "#4A86C5"              # 버튼·선택·포커스 (차분한 파랑)
+backgroundColor = "#FBFCFE"           # 본문 배경 (아주 옅은 블루화이트)
+secondaryBackgroundColor = "#DCE9F7"  # 사이드바·표 헤더·입력칸 (파스텔 블루)
+textColor = "#1F2A37"                 # 본문 글자 (진한 남색 계열, 순검정보다 부드러움)
+borderColor = "#B9D2EC"               # 표·입력칸 테두리
+linkColor = "#2F6FAF"
+
+[theme.sidebar]
+backgroundColor = "#E8F0FA"
+secondaryBackgroundColor = "#FFFFFF"
