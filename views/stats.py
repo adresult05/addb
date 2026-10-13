@@ -1,0 +1,311 @@
+from datetime import date, timedelta
+
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+
+from utils import auth as A
+from utils import config as C
+from utils import analytics as AN
+from utils import data as D
+from utils import ui as UI
+from utils.clean import region_of
+
+BLUE = ["#0068C9"]
+
+
+def _fig(fig):
+    fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), xaxis_title=None, height=340)
+    st.plotly_chart(fig, width="stretch")
+
+
+def _ym_filter(df):
+    """연도 + 월(또는 분기) 드롭다운으로 거르기."""
+    years = sorted({m[:4] for m in df["입력월"] if m}, reverse=True)   # 연도는 한 해에 하나씩만 늘어남
+    unit = st.session_state.get("기간 단위", "월별")
+    c1, c2, _ = st.columns([1, 1, 2])
+    year = c1.selectbox("입력 연도", ["전체"] + years)
+    if unit == "분기별":        # 기간 단위에 맞춰 아래 필터도 분기/월로 바뀜
+        period = c2.selectbox("입력 분기", ["전체", "Q1", "Q2", "Q3", "Q4"])
+    elif unit == "월별":
+        period = c2.selectbox("입력 월", ["전체"] + [f"{m:02d}" for m in range(1, 13)])
+    else:
+        period = "전체"
+        c2.selectbox("입력 기간", ["연도로 선택"], disabled=True,
+                     help="연별로 볼 때는 왼쪽의 '입력 연도'로 기간을 고르세요.")
+
+    if year != "전체":
+        df = df[df["입력월"].str[:4] == year]
+    if period != "전체":
+        mm = pd.to_numeric(df["입력월"].str[5:7], errors="coerce")
+        df = df[mm.map(lambda m: f"Q{int((m - 1) // 3 + 1)}") == period] if period.startswith("Q") \
+            else df[df["입력월"].str[5:7] == period]
+    return df, ""
+
+
+def _quick_range(key: str, today: date, bounds):
+    """자주 쓰는 기간 버튼. 누르면 달력 값이 그 기간으로 바뀝니다."""
+    first_this = today.replace(day=1)
+    prev_end = first_this - timedelta(days=1)
+    presets = [
+        ("최근 7일", today - timedelta(days=6), today),
+        ("최근 30일", today - timedelta(days=29), today),
+        ("이번 달", first_this, today),
+        ("지난 달", prev_end.replace(day=1), prev_end),
+        ("올해", date(today.year, 1, 1), today),
+    ]
+    cols = st.columns(len(presets))
+    for col, (label, s_, e_) in zip(cols, presets):
+        # on_click 콜백은 위젯이 다시 만들어지기 전에 실행되므로 달력 값을 바꿀 수 있습니다.
+        col.button(label, key=f"{key}_{label}", width="stretch",
+                   on_click=_set_range, args=(key, _clamp((s_, e_), bounds)))
+
+
+def _set_range(key, rng):
+    st.session_state[key] = rng
+
+
+def _clamp(rng, bounds):
+    lo, hi = bounds
+    return tuple(min(max(d, lo), hi) for d in rng)
+
+
+def _range_filter(df):
+    """달력에서 시작일~종료일을 직접 고르기."""
+    dates = pd.to_datetime(df["입력날짜"], errors="coerce").dropna()
+    if dates.empty:
+        return df.iloc[0:0], ""
+    lo, hi = dates.min().date(), dates.max().date()
+    today = date.today()
+    # 달력 선택 범위는 데이터 구간보다 넉넉하게 (빠른 버튼이 벗어나지 않도록)
+    bounds = (min(lo, date(today.year, 1, 1), today - timedelta(days=365)), max(hi, today))
+    key = "stat_range"
+    if key not in st.session_state:                       # 기본값: 데이터가 있는 전체 기간
+        st.session_state[key] = (lo, hi)
+    cur = st.session_state[key]
+    if isinstance(cur, (tuple, list)) and cur:            # 저장된 값이 범위를 벗어나면 보정
+        fixed = _clamp(tuple(cur), bounds)
+        if tuple(cur) != fixed:
+            st.session_state[key] = fixed
+
+    c1, _ = st.columns([1.6, 2])
+    picked = c1.date_input("조회 기간", key=key, min_value=bounds[0], max_value=bounds[1],
+                           format="YYYY-MM-DD",
+                           help="시작일을 누르고 종료일을 누르면 그 사이 기간만 집계합니다.")
+    _quick_range(key, today, bounds)
+
+    if not isinstance(picked, (tuple, list)) or len(picked) < 2:
+        return df, "종료일을 마저 선택해주세요. (지금은 전체 기간 기준)"
+    start, end = picked[0], picked[1]
+    d = pd.to_datetime(df["입력날짜"], errors="coerce")
+    out = df[(d >= pd.Timestamp(start)) & (d <= pd.Timestamp(end))]
+    days = (end - start).days + 1
+    return out, f"조회 기간: {start:%Y-%m-%d} ~ {end:%Y-%m-%d} ({days}일, {len(out):,}건)"
+
+
+def render():
+    UI.page_header("애드리절트 DB 통계 대시보드")
+    df = A.scope(D.load_db())
+
+    admin = A.current_user()["role"] == "admin"
+    f1, f2, f3 = st.columns([2, 1.2, 1.6])
+    team = f1.selectbox("애드리절트 담당부서", ["전체"] + ([C.UNASSIGNED] if admin else []) + A.visible_teams())
+    unit = f2.selectbox("기간 단위", ["월별", "분기별", "연별"], key="기간 단위")
+    mode = f3.radio("조회 방식", ["연·월 선택", "기간 직접 선택"], horizontal=True,
+                    help="'기간 직접 선택'은 달력에서 시작일~종료일을 고릅니다.")
+
+    if team == C.UNASSIGNED:
+        df = df[df["담당부서"] == ""]
+    elif team != "전체":
+        df = df[df["담당부서"] == team]
+
+    df, caption = (_range_filter(df) if mode == "기간 직접 선택" else _ym_filter(df))
+    if caption:
+        st.caption(caption)
+    if df.empty:
+        st.info("조건에 맞는 DB가 없습니다.")
+        return
+
+    total = len(df)
+    done = int((df["진행상황"] == C.CONTRACT_DONE).sum())
+    pending = int((df["진행상황"] == C.PRE_CONTACT).sum())
+
+    st.divider()
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("총 DB", f"{total:,}건")
+    k2.metric("계약전환율", f"{done / total * 100:.1f}%", help="계약완료 ÷ 총 DB")
+    k3.metric("계약완료 수", f"{done:,}건")
+    k4.metric("접촉 전 DB", f"{pending:,}건", help="진행상황이 '접촉 전'인 DB")
+    st.divider()
+
+    a, b = st.columns(2, gap="large")
+    with a:
+        st.subheader("팀별 DB수")
+        order = C.TEAMS + ([C.UNASSIGNED] if admin else [])
+        g = (df["담당부서"].replace("", C.UNASSIGNED).value_counts()
+             .reindex(order, fill_value=0).rename_axis("담당부서").reset_index(name="DB수"))
+        _fig(px.bar(g, x="담당부서", y="DB수", text_auto=True, color_discrete_sequence=BLUE))
+    with b:
+        st.subheader("채널별 효율 (계약전환율)")
+        g = df.groupby("유입경로").agg(총=("순번", "count"),
+                                        계약=("진행상황", lambda s: (s == C.CONTRACT_DONE).sum()))
+        g["계약전환율(%)"] = (g["계약"] / g["총"] * 100).round(1)
+        g = g.reset_index().sort_values("계약전환율(%)", ascending=False)
+        _fig(px.bar(g, x="유입경로", y="계약전환율(%)", text_auto=True, color_discrete_sequence=BLUE))
+
+    c, d = st.columns(2, gap="large")
+    with c:
+        st.subheader(f"{unit} DB 추이")
+        dt = pd.to_datetime(df["입력날짜"])
+        if unit == "연별":
+            key = dt.dt.year.astype(str)
+        elif unit == "분기별":
+            key = dt.dt.to_period("Q").astype(str)
+        else:
+            key = dt.dt.to_period("M").astype(str)
+        g = key.value_counts().sort_index().reset_index()
+        g.columns = ["기간", "DB수"]
+        _fig(px.line(g, x="기간", y="DB수", markers=True, color_discrete_sequence=BLUE))
+    with d:
+        st.subheader("진행상황별 분포")
+        g = df.groupby("진행상황").size().reindex(C.STATUSES, fill_value=0).reset_index(name="DB수")
+        _fig(px.bar(g, x="진행상황", y="DB수", text_auto=True, color_discrete_sequence=BLUE))
+
+    e, f = st.columns(2, gap="large")
+    with e:
+        st.subheader("지역별 DB수")
+        g = df["병원소재지"].map(region_of).value_counts().rename_axis("지역").reset_index(name="DB수")
+        _fig(px.bar(g, x="지역", y="DB수", text_auto=True, color_discrete_sequence=BLUE))
+    with f:
+        st.subheader("분과별 DB수")
+        g = df["분과"].replace("", "미상").value_counts().rename_axis("분과").reset_index(name="DB수")
+        _fig(px.bar(g, x="분과", y="DB수", text_auto=True, color_discrete_sequence=BLUE))
+
+    with st.expander("⬇️ 데이터 내보내기 (CSV)"):
+        _export(df)
+
+    with st.expander("🔎 세부 통계 보기 (퍼널 · 응답 속도 · 기간 비교)"):
+        _detail_stats(df, A.scope(D.load_db()))
+
+    st.subheader("항목별 계약전환율")
+    t = df.assign(지역=df["병원소재지"].map(region_of), 분과=df["분과"].replace("", "미상"),
+                  비고=df["비고"].replace("", "(없음)"))
+    tab_region, tab_dept, tab_note = st.tabs(["지역별", "분과별", "비고(캠페인)별"])
+    for tab, col in ((tab_region, "지역"), (tab_dept, "분과"), (tab_note, "비고")):
+        with tab:
+            g = t.groupby(col).agg(DB수=("순번", "count"),
+                                   계약완료=("진행상황", lambda s: (s == C.CONTRACT_DONE).sum()))
+            g["계약전환율(%)"] = (g["계약완료"] / g["DB수"] * 100).round(1)
+            st.dataframe(g.sort_values("DB수", ascending=False), width="stretch")
+
+
+# ══ 세부 통계 ═══════════════════════════════════════════════════
+def _detail_stats(df, full_db):
+    logs = D.load_logs()
+    logs = logs[logs["순번"].isin(set(df["순번"]))]
+    t_funnel, t_speed, t_period = st.tabs(["🔻 퍼널", "⏱️ 응답 속도", "📆 기간 비교"])
+
+    with t_funnel:
+        _funnel_tab(df, logs)
+    with t_speed:
+        _speed_tab(df, logs)
+    with t_period:
+        _period_tab(full_db)
+
+
+def _funnel_tab(df, logs):
+    st.caption(f"단계 순서: {' → '.join(C.FUNNEL_STAGES)} · "
+               f"{', '.join(C.FUNNEL_EXCLUDE)} 는 제외 · "
+               f"{', '.join(C.SIDE_STATUSES)} 는 단계 후퇴로 보지 않고 한 번 도달한 단계를 유지합니다.")
+    f = AN.funnel(df, logs)
+    if f["도달"].iloc[0] == 0:
+        st.info("계산할 DB가 없습니다.")
+        return
+
+    fig = px.funnel(f, x="도달", y="단계", color_discrete_sequence=BLUE)
+    fig.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=320, yaxis_title=None)
+    st.plotly_chart(fig, width="stretch")
+
+    st.dataframe(f, hide_index=True, width="stretch")
+    worst = f.iloc[1:]["멈춤 비율(%)"].idxmax() if len(f) > 1 else None
+    if worst is not None and f.loc[worst, "여기서 멈춤"]:
+        st.caption(f"가장 많이 멈추는 지점: **{f.loc[worst, '단계']}** "
+                   f"({f.loc[worst, '여기서 멈춤']}건, {f.loc[worst, '멈춤 비율(%)']}%)")
+
+    st.markdown("**최고 도달 단계별 목록**")
+    live = AN.max_stage(df, logs)
+    pick = st.selectbox("단계 선택", C.FUNNEL_STAGES, key="funnel_stage_pick")
+    sel = live[live["최고단계"] == pick]
+    cols = ["순번", "입력날짜", "담당부서", "진행상황", "병원명", "유입경로", "비고"]
+    st.dataframe(sel[cols], hide_index=True, width="stretch", height=240)
+
+
+def _speed_tab(df, logs):
+    st.caption("DB가 들어온 날부터 첫 영업로그가 남은 날까지 걸린 시간입니다. "
+               "영업로그를 남겨야 집계되니, 통화·상담 후 로그를 남겨주세요.")
+    contacted, pending = AN.response_speed(df, logs)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("접촉한 DB", f"{len(contacted):,}건")
+    c2.metric("평균 소요", f"{contacted['소요일'].mean():.1f}일" if len(contacted) else "-")
+    c3.metric("중앙값", f"{contacted['소요일'].median():.0f}일" if len(contacted) else "-")
+    c4.metric("당일 접촉", f"{(contacted['소요일'] == 0).mean() * 100:.0f}%" if len(contacted) else "-")
+
+    b = AN.speed_buckets(contacted)
+    if not b.empty:
+        _fig(px.bar(b, x="구간", y="건수", text_auto=True, color_discrete_sequence=BLUE))
+
+    st.markdown(f"**아직 접촉 기록이 없는 DB · {len(pending)}건**")
+    if pending.empty:
+        st.success("모든 DB에 영업로그가 남아 있습니다 🎉")
+    else:
+        cols = ["순번", "입력날짜", "경과일", "담당부서", "진행상황", "병원명", "연락처"]
+        st.dataframe(pending[cols], hide_index=True, width="stretch", height=260)
+        st.caption("경과일이 큰 순서입니다. 오래 방치된 DB부터 확인해주세요.")
+
+
+def _period_tab(full_db):
+    months = sorted(full_db["입력월"].unique(), reverse=True)
+    if len(months) < 2:
+        st.info("비교할 달이 아직 부족합니다. (2개월 이상 데이터 필요)")
+        return
+    c1, c2 = st.columns(2)
+    cur = c1.selectbox("기준 달", months, index=0, key="cmp_cur")
+    prev_opts = [m for m in months if m != cur]
+    prev = c2.selectbox("비교 달", prev_opts, index=0, key="cmp_prev")
+
+    st.dataframe(AN.compare_months(full_db, cur, prev), hide_index=True, width="stretch")
+
+    st.markdown("**항목별 비교**")
+    by = st.radio("기준", ["담당부서", "유입경로", "분과", "비고"], horizontal=True, key="cmp_by")
+    st.dataframe(AN.by_group_compare(full_db, cur, prev, by), hide_index=True, width="stretch")
+
+
+# ══ CSV 내보내기 ════════════════════════════════════════════════
+def _export(df):
+    """나중에 엑셀·BI 툴에서 분석할 수 있도록 원본 데이터를 그대로 내려받습니다."""
+    st.caption("위 필터(담당부서·기간)가 적용된 데이터입니다. 엑셀에서 바로 열 수 있는 형식(UTF-8 BOM)이에요.")
+    logs = D.load_logs()
+    logs_sel = logs[logs["순번"].isin(set(df["순번"]))]
+    live = AN.max_stage(df, logs_sel)
+    contacted, _ = AN.response_speed(df, logs_sel)
+
+    # 분석용: DB 한 건당 한 줄 + 최고단계·첫접촉 소요일까지 붙여서
+    enriched = df.drop(columns=["입력월"], errors="ignore").merge(
+        live[["순번", "최고단계"]], on="순번", how="left").merge(
+        contacted[["순번", "소요일"]].rename(columns={"소요일": "첫접촉소요일"}), on="순번", how="left")
+
+    c1, c2, c3 = st.columns(3)
+    today = f"{date.today():%Y%m%d}"
+    with c1:
+        st.markdown("**DB 목록**")
+        st.caption("한 건당 한 줄. 최고 도달 단계와 첫 접촉까지 걸린 일수가 함께 들어갑니다.")
+        UI.download_csv(enriched, f"DB목록_{today}.csv", key="exp_db", width="stretch")
+    with c2:
+        st.markdown("**진행로그**")
+        st.caption("등록·배정·이관·영업로그 전체 이력. 단계 변화를 추적할 때 씁니다.")
+        UI.download_csv(logs_sel, f"진행로그_{today}.csv", key="exp_log", width="stretch")
+    with c3:
+        st.markdown("**퍼널 요약**")
+        st.caption("단계별 도달 수·도달률·이탈 비율 표.")
+        UI.download_csv(AN.funnel(df, logs_sel), f"퍼널요약_{today}.csv", key="exp_fn", width="stretch")
