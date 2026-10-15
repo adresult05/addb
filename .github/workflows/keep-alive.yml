@@ -1,0 +1,48 @@
+name: Keep Streamlit app awake
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Playwright 설치
+        run: |
+          python -m pip install --quiet playwright
+          python -m playwright install --with-deps chromium
+
+      - name: 앱 방문
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "::error::저장소 변수 APP_URL 이 설정되지 않았습니다."
+            exit 1
+          fi
+          python .github/keep_alive.py "$APP_URL"
+
+      - name: 실패 시 화면 캡처 남기기
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keepalive-screenshot
+          path: keepalive.png
+          if-no-files-found: ignore
+          retention-days: 7
