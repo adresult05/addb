@@ -4,6 +4,12 @@ from utils import config as C
 from utils import ui as UI
 
 
+# 팀 계정도 admin 과 똑같이 전체 DB 조회 + 팀 배정 + Tally 불러오기를 할 수 있게 합니다.
+# 팀별로 자기 DB만 보게 되돌리려면 이 값을 False 로 바꾸세요
+# (그러면 secrets 의 role = "team" / team = "..." 설정이 그대로 적용됩니다).
+EVERYONE_IS_ADMIN = True
+
+
 def _users() -> dict:
     try:
         u = st.secrets.get("users")
@@ -91,8 +97,8 @@ def login_view():
                     st.session_state["user"] = {
                         "id": uid.strip(),
                         "name": str(info.get("name", "") or uid.strip()),  # 없으면 아이디를 그대로
-                        "role": info.get("role", "team"),
-                        "team": info.get("team", ""),
+                        "role": "admin" if EVERYONE_IS_ADMIN else info.get("role", "team"),
+                        "team": info.get("team", ""),      # 소속 표시용 (권한과는 별개)
                     }
                     st.rerun()
                 elif not uid.strip() or not pw:
@@ -112,7 +118,8 @@ def sidebar_user():
     with st.sidebar:
         st.markdown(f"**👤 {name}**")
         # 이름이 팀 이름 그대로면 "(본사1팀)" 을 또 붙이지 않음
-        team = "" if (u["role"] == "admin" or u.get("team", "") == name) else u.get("team", "")
+        team = u.get("team", "")
+        team = "" if team == name else team
         st.caption(f"환영합니다, {name}님" + (f" ({team})" if team else ""))
         if st.button("로그아웃", icon=":material/logout:", width="stretch"):
             st.session_state.clear()
