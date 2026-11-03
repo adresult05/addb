@@ -29,6 +29,12 @@ def current_user() -> dict:
     return st.session_state["user"]
 
 
+def display_name(u: dict = None) -> str:
+    """화면에 보여줄 이름. secrets에 name 을 적어두면 그 이름, 없으면 아이디."""
+    u = u or current_user()
+    return str(u.get("name") or u.get("id", ""))
+
+
 def visible_teams() -> list:
     u = current_user()
     return C.TEAMS if u["role"] == "admin" else [u["team"]]
@@ -84,6 +90,7 @@ def login_view():
                 if info and _pw_ok(info.get("password", ""), pw):
                     st.session_state["user"] = {
                         "id": uid.strip(),
+                        "name": str(info.get("name", "") or uid.strip()),  # 없으면 아이디를 그대로
                         "role": info.get("role", "team"),
                         "team": info.get("team", ""),
                     }
@@ -101,9 +108,10 @@ def login_view():
 
 def sidebar_user():
     u = current_user()
+    name = display_name(u)
     with st.sidebar:
-        st.markdown(f"**👤 {u['id']}**")
-        st.caption(f"환영합니다, {u['id']}님" + ("" if u["role"] == "admin" else f" ({u['team']})"))
+        st.markdown(f"**👤 {name}**")
+        st.caption(f"환영합니다, {name}님" + ("" if u["role"] == "admin" else f" ({u['team']})"))
         if st.button("로그아웃", icon=":material/logout:", width="stretch"):
             st.session_state.clear()
             st.rerun()
