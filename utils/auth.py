@@ -111,7 +111,9 @@ def sidebar_user():
     name = display_name(u)
     with st.sidebar:
         st.markdown(f"**👤 {name}**")
-        st.caption(f"환영합니다, {name}님" + ("" if u["role"] == "admin" else f" ({u['team']})"))
+        # 이름이 팀 이름 그대로면 "(본사1팀)" 을 또 붙이지 않음
+        team = "" if (u["role"] == "admin" or u.get("team", "") == name) else u.get("team", "")
+        st.caption(f"환영합니다, {name}님" + (f" ({team})" if team else ""))
         if st.button("로그아웃", icon=":material/logout:", width="stretch"):
             st.session_state.clear()
             st.rerun()
