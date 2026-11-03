@@ -85,7 +85,7 @@ def login_view():
 
         with st.container(border=True):
             with st.form("login"):
-                uid = st.text_input("아이디", placeholder="예: mapo",
+                uid = st.text_input("아이디", placeholder="아이디 입력",
                                     autocomplete="username")
                 pw = st.text_input("비밀번호", type="password", placeholder="비밀번호 입력",
                                    autocomplete="current-password")
