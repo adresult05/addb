@@ -77,18 +77,7 @@ def _info_form():
 def _catalog_section():
     st.subheader("🛒 카탈로그에서 담기")
     with st.expander("⚙️ 카탈로그 관리 (상품·가격 추가/수정)"):
-        cat_ver = st.session_state.setdefault("cat_ver", 0)
-        cat = D.load_catalog()
-        cat["단가"] = pd.to_numeric(cat["단가"], errors="coerce").fillna(0)
-        edited_cat = st.data_editor(cat, hide_index=True, num_rows="dynamic", width="stretch",
-                                    key=f"cat_editor_{cat_ver}",
-                                    column_config={"단가": st.column_config.NumberColumn(
-                                        format="%,d", min_value=0, step=10000)})
-        if st.button("카탈로그 저장", type="primary", key=f"cat_save_{cat_ver}"):
-            D.save_catalog(edited_cat)
-            st.session_state["cat_ver"] = cat_ver + 1
-            st.toast("카탈로그가 저장되었습니다.", icon="✅")
-            st.rerun()
+        _catalog_editor()
 
     catalog = D.load_catalog()
     catalog["단가"] = pd.to_numeric(catalog["단가"], errors="coerce").fillna(0)
@@ -105,6 +94,77 @@ def _catalog_section():
         st.session_state["item_ver"] = st.session_state.get("item_ver", 0) + 1
         st.toast(f"{len(rows)}건을 견적에 담았습니다.", icon="🛒")
         st.rerun()
+
+
+def _int(v) -> int:
+    digits = re.sub(r"[^0-9]", "", str(v or ""))
+    return int(digits) if digits else 0
+
+
+def _reset_catalog_rows(rows=None):
+    """카탈로그 편집 위젯을 새 키로 다시 만듭니다.
+    rows=None 이면 다음 화면에서 저장소의 내용을 새로 읽어옵니다."""
+    ver = st.session_state.get("cat_ver", 0)
+    st.session_state.pop(f"cat_rows_{ver}", None)
+    st.session_state["cat_ver"] = ver + 1
+    if rows is not None:
+        st.session_state[f"cat_rows_{ver + 1}"] = rows
+
+
+def _catalog_editor():
+    """카탈로그 편집 — 일반 입력칸으로 만들어서, 칸을 채우고 바로 저장을 눌러도
+    입력한 값이 그대로 저장됩니다 (스프레드시트형 편집기는 값이 반영 안 되는 일이 있었음)."""
+    ver = st.session_state.setdefault("cat_ver", 0)
+    key_rows = f"cat_rows_{ver}"
+    if key_rows not in st.session_state:
+        cat = D.load_catalog().reindex(columns=C.CATALOG_COLS, fill_value="")
+        st.session_state[key_rows] = cat.astype(str).to_dict("records")
+    records = st.session_state[key_rows]
+
+    st.caption("상품명만 적어두고 상세·단가는 나중에 채워도 그대로 저장됩니다. "
+               "다 고친 뒤 **💾 카탈로그 저장** 을 꼭 눌러주세요.")
+
+    W = [1.5, 2.2, 2.6, 1.3, 1.3, 0.45]
+    h = st.columns(W)
+    for c, label in zip(h, ["채널", "상품", "상세", "수량·기간", "단가", ""]):
+        c.markdown(f"<div class='fieldlabel'>{label}</div>", unsafe_allow_html=True)
+
+    updated, delete_idx = [], None
+    for i, rec in enumerate(records):
+        k = f"cat_{ver}_{i}"
+        c = st.columns(W, vertical_alignment="top")
+        ch = c[0].text_input("채널", value=str(rec.get("채널", "")), key=f"{k}_ch",
+                             label_visibility="collapsed", placeholder="예: 네이버")
+        prod = c[1].text_input("상품", value=str(rec.get("상품", "")), key=f"{k}_pd",
+                               label_visibility="collapsed", placeholder="상품명")
+        desc = c[2].text_input("상세", value=str(rec.get("상세", "")), key=f"{k}_ds",
+                               label_visibility="collapsed", placeholder="나중에 채워도 됩니다")
+        qty = c[3].text_input("수량기간", value=str(rec.get("수량기간", "")), key=f"{k}_qt",
+                              label_visibility="collapsed", placeholder="예: 1개월")
+        price = _money_input(c[4], _int(rec.get("단가", 0)), f"{k}_pr")
+        if c[5].button("✕", key=f"{k}_del", help="이 줄 삭제"):
+            delete_idx = i
+        updated.append({"채널": ch, "상품": prod, "상세": desc, "수량기간": qty, "단가": price})
+
+    st.session_state[key_rows] = updated
+
+    if delete_idx is not None:
+        _reset_catalog_rows([r for j, r in enumerate(updated) if j != delete_idx])
+        st.rerun()
+
+    b1, b2, _ = st.columns([1.1, 1.3, 3])
+    if b1.button("➕ 상품 추가", key=f"cat_add_{ver}"):
+        _reset_catalog_rows(updated + [dict.fromkeys(C.CATALOG_COLS, "") | {"단가": 0}])
+        st.rerun()
+    if b2.button("💾 카탈로그 저장", type="primary", key=f"cat_save_{ver}"):
+        rows = [r for r in updated if str(r["상품"]).strip() or str(r["채널"]).strip()]
+        if not rows:
+            st.warning("저장할 내용이 없습니다. 상품명을 한 줄이라도 적어주세요.")
+        else:
+            D.save_catalog(pd.DataFrame(rows, columns=C.CATALOG_COLS))
+            _reset_catalog_rows()          # 저장된 내용을 다시 읽어서 표시
+            st.toast(f"카탈로그 {len(rows)}건을 저장했습니다.", icon="✅")
+            st.rerun()
 
 
 def _qty_num(text):
