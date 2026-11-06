@@ -40,15 +40,15 @@ def render():
         c1, c2 = st.columns(2, gap="large")
         with c1:
             with st.container(border=True):
-                st.markdown("### 1️⃣ 메인")
+                st.markdown("### 🏠 메인")
                 st.markdown("#### DB 확인하고 팀 배정하기")
                 st.markdown("새로 들어온 문의를 보고, **어느 팀이 맡을지 정해줍니다.**")
                 st.caption("자세한 방법은 위의 '🏠 메인' 탭을 보세요.")
         with c2:
             with st.container(border=True):
-                st.markdown("### 2️⃣ DB현황 / 영업로그")
+                st.markdown("### 📋 DB현황 / 영업로그")
                 st.markdown("#### 내 DB 보고 기록 남기기")
-                st.markdown("내 팀 DB를 열어 전화하고, **통화한 내용을 바로 적습니다.**")
+                st.markdown("내 팀 DB를 열고, **진행 상황을 바로 적습니다.**")
                 st.caption("자세한 방법은 위의 '📋 DB현황 / 영업로그' 탭을 보세요.")
 
         st.markdown("&nbsp;")
