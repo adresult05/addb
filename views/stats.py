@@ -129,13 +129,17 @@ def render():
     total = len(df)
     done = int((df["진행상황"] == C.CONTRACT_DONE).sum())
     pending = int((df["진행상황"] == C.PRE_CONTACT).sum())
+    valid = int(df["진행상황"].isin(C.VALID_STAGES).sum())   # 상담중·미팅·계약완료
 
     st.divider()
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("총 DB", f"{total:,}건")
     k2.metric("계약전환율", f"{done / total * 100:.1f}%", help="계약완료 ÷ 총 DB")
     k3.metric("계약완료 수", f"{done:,}건")
     k4.metric("접촉 전 DB", f"{pending:,}건", help="진행상황이 '접촉 전'인 DB")
+    k5.metric("유효 DB 비율", f"{valid / total * 100:.1f}%",
+              help=f"{' · '.join(C.VALID_STAGES)} ÷ 총 DB "
+                   f"— 지금 {valid:,}건 ÷ {total:,}건 (현재 진행상황 기준)")
     st.divider()
 
     a, b = st.columns(2, gap="large")
