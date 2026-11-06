@@ -12,7 +12,7 @@ if not A.is_logged_in():
     A.login_view()
     st.stop()
 
-from views import db_input, db_status, main, quote, special_db, stats  # noqa: E402
+from views import db_input, db_status, help_page, main, quote, special_db, stats  # noqa: E402
 
 pages = [
     st.Page(main.render, title="메인", icon=":material/home:", url_path="main", default=True),
@@ -21,6 +21,7 @@ pages = [
     st.Page(db_input.render, title="DB입력", icon=":material/edit_note:", url_path="db-input"),
     st.Page(special_db.render, title="특별 DB", icon=":material/celebration:", url_path="special-db"),
     st.Page(quote.render, title="견적서제작", icon=":material/description:", url_path="quote"),
+    st.Page(help_page.render, title="사용법", icon=":material/help:", url_path="help"),
 ]
 pg = st.navigation(pages)
 UI.sidebar_logo()
