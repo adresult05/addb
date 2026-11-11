@@ -184,12 +184,12 @@ def login_view():
         img = f"<img src='data:image/png;base64,{b64}' alt=''>" if b64 else ""
         st.markdown(f"<div class='loginhead'>{img}"
                     f"<div class='lt'>{C.APP_TITLE}</div>"
-                    f"<div class='ls'>애드리절트 내부용입니다. 받으신 계정으로 로그인해주세요.</div></div>",
+                    f"<div class='ls'>아래에서 로그인해주세요.</div></div>",
                     unsafe_allow_html=True)
 
         with st.container(border=True):
             with st.form("login"):
-                uid = st.text_input("아이디", placeholder="예: mapo",
+                uid = st.text_input("아이디", placeholder="아이디 입력",
                                     autocomplete="username")
                 pw = st.text_input("비밀번호", type="password", placeholder="비밀번호 입력",
                                    autocomplete="current-password")
