@@ -656,6 +656,8 @@ def duplicate_groups() -> pd.DataFrame:
     """연락처 또는 병원명이 겹치는 DB들만 모아서 반환.
     중복사유와 '어느 순번과 겹치는지'(중복상대)를 함께 넣고, 같은 묶음끼리 붙여서 정렬합니다."""
     db = load_db()
+    # 이미 '중복'·'무효'로 정리한 건은 빼고 봅니다 (정리할수록 목록이 줄어들게)
+    db = db[~db["진행상황"].isin(C.FUNNEL_EXCLUDE)].reset_index(drop=True)
     if db.empty:
         return db.assign(중복사유="", 중복상대="")
     ph = db["연락처"].map(phone_digits)
@@ -797,20 +799,30 @@ def unassign_db(no: str, author: str = ""):
         raise ValueError("이미 미할당 상태입니다.")
 
 
-def mark_invalid_many(nos: list, author: str = "") -> int:
-    """미할당 DB를 팀 배정 없이 '무효' 처리 (할당 전 이상한 DB 거르기용)."""
+DUP_STATUS = "중복"          # 중복 의심 DB를 정리할 때 쓰는 진행상황
+
+
+def mark_status_many(nos: list, status: str, author: str = "", note: str = "") -> int:
+    """여러 DB의 진행상황을 한 번에 바꾸고 기록을 남깁니다 (무효·중복 정리용)."""
     b = _backend()
     db = b.read_db(fresh=True)
     d = date.today()
+    kind = {C.INVALID_STATUS: "무효", DUP_STATUS: "중복"}.get(status, "영업")
     updates, logs = {}, []
     for _, r in db[db["순번"].isin(nos)].iterrows():
-        if r["진행상황"] == C.INVALID_STATUS:
+        if r["진행상황"] == status:
             continue
-        updates[r["순번"]] = {"진행상황": C.INVALID_STATUS}
-        logs.append(_log_entry(r["순번"], d, C.INVALID_STATUS, "할당 전 무효 처리", author, "무효"))
+        updates[r["순번"]] = {"진행상황": status}
+        logs.append(_log_entry(r["순번"], d, status,
+                               note or f"{status} 처리", author, kind))
     b.update_db_many(updates)
     b.append_logs(logs)
     return len(updates)
+
+
+def mark_invalid_many(nos: list, author: str = "") -> int:
+    """미할당 DB를 팀 배정 없이 '무효' 처리 (할당 전 이상한 DB 거르기용)."""
+    return mark_status_many(nos, C.INVALID_STATUS, author, "할당 전 무효 처리")
 
 
 # ══ raw(Tally) → 마스터 가져오기 ═══════════════════════════════
