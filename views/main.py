@@ -89,12 +89,27 @@ def _duplicate_section():
     dups = D.duplicate_groups()
     if dups.empty:
         return
+    ver = st.session_state.setdefault("dup_ver", 0)      # 처리 후 선택 상태 초기화용
     st.subheader(f"⚠️ 중복 의심 DB ({len(dups)}건)")
     st.caption("연락처 또는 병원명이 같은 DB입니다. '중복상대' 칸의 순번과 겹칩니다. "
-               "같은 묶음끼리 붙여놨으니 확인 후 한쪽을 '중복' 또는 '무효'로 정리해주세요.")
-    show = ["순번", "중복상대", "중복사유", "입력날짜", "담당부서", "진행상황", "병원명", "연락처", "유입경로", "비고"]
-    st.dataframe(dups.sort_values(["병원명", "순번"])[show], hide_index=True, width="stretch",
-                 height=220)
+               "같은 묶음끼리 붙여놨으니, 남길 쪽만 두고 나머지를 체크해서 바로 정리하세요.")
+    show = ["순번", "중복상대", "중복사유", "입력날짜", "담당부서", "진행상황",
+            "병원명", "연락처", "유입경로", "비고"]
+    view = dups.reset_index(drop=True)                   # 묶음 순서 그대로 (정렬하지 않음)
+    event = st.dataframe(view[show], hide_index=True, width="stretch", height=260,
+                         on_select="rerun", selection_mode="multi-row", key=f"dup_tbl_{ver}")
+    rows = event.selection.rows
+
+    c1, c2, _ = st.columns([1, 1, 2], vertical_alignment="bottom")
+    choice = c1.selectbox("처리", [D.DUP_STATUS, C.INVALID_STATUS], key=f"dup_act_{ver}",
+                          help="중복 = 같은 문의가 또 들어온 경우 / 무효 = 장난·오접수")
+    if c2.button(f"선택 {len(rows)}건 {choice} 처리", disabled=not rows, width="stretch"):
+        nos = [view.iloc[i]["순번"] for i in rows]
+        n = D.mark_status_many(nos, choice, A.current_user()["id"],
+                               f"중복 의심 목록에서 {choice} 처리")
+        st.session_state["main_flash"] = f"✅ {n}건을 '{choice}'(으)로 정리했습니다."
+        st.session_state["dup_ver"] = ver + 1
+        st.rerun()
 
 
 def _assign_section(unassigned):
