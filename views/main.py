@@ -90,8 +90,9 @@ def _duplicate_section():
     if dups.empty:
         return
     st.subheader(f"⚠️ 중복 의심 DB ({len(dups)}건)")
-    st.caption("연락처 또는 병원명이 같은 DB입니다. 확인 후 한쪽을 '중복' 또는 '무효'로 정리해주세요.")
-    show = ["순번", "중복사유", "입력날짜", "담당부서", "진행상황", "병원명", "연락처", "유입경로", "비고"]
+    st.caption("연락처 또는 병원명이 같은 DB입니다. '중복상대' 칸의 순번과 겹칩니다. "
+               "같은 묶음끼리 붙여놨으니 확인 후 한쪽을 '중복' 또는 '무효'로 정리해주세요.")
+    show = ["순번", "중복상대", "중복사유", "입력날짜", "담당부서", "진행상황", "병원명", "연락처", "유입경로", "비고"]
     st.dataframe(dups.sort_values(["병원명", "순번"])[show], hide_index=True, width="stretch",
                  height=220)
 
