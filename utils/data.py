@@ -246,9 +246,14 @@ class SheetsBackend:
             if not head:
                 ws.update([cols], "A1", value_input_option="RAW")
             elif head[:len(cols)] != cols:
-                raise RuntimeError(f"시트 '{name}'의 헤더가 앱 형식과 달라 사용할 수 없습니다. "
-                                   f"새 시트 이름을 secrets의 master_worksheet/log_worksheet에 지정해주세요. "
-                                   f"(필요한 헤더: {', '.join(cols)})")
+                raise RuntimeError(
+                    f"시트 '{name}'의 1행(헤더)이 앱 형식과 다릅니다. 데이터를 잘못 읽지 않도록 중단했습니다.\n\n"
+                    f"· 지금 1행: {' | '.join(head) or '(빈 줄)'}\n"
+                    f"· 있어야 할 1행: {' | '.join(cols)}\n\n"
+                    f"시트에서 방금 정렬이나 행 삭제를 하셨다면 Ctrl+Z(실행취소)로 되돌리는 게 가장 안전합니다. "
+                    f"헤더 줄이 아래로 내려가 있으면 1행으로 올려주시고, 지워졌으면 1행을 새로 넣어 "
+                    f"위 순서대로 채워주세요. (다른 시트를 쓰려면 secrets의 "
+                    f"master_worksheet/log_worksheet에 그 시트 이름을 적어주세요.)")
         except self.NotFound:
             ws = self.app_ss.add_worksheet(title=name, rows=2000, cols=len(cols))
             ws.update([cols], "A1", value_input_option="RAW")
@@ -613,8 +618,24 @@ def update_note(no: str, text: str):
     _backend().update_db_many({no: {"비고": text}})
 
 
+# 병원명 자리에 들어간 '이름 아님' 값들 — 중복 판정에서 제외합니다
+#   (이런 값끼리 묶여서 엉뚱한 중복 의심이 무더기로 뜨는 걸 막기 위함)
+PLACEHOLDER_NAMES = {
+    "x", "xx", "xxx", "o", "oo", "ㅇ", "ㄹ", "ㅁ", "ㅕ", "-", ".", "?", "??",
+    "모름", "미정", "없음", "미기재", "미상", "비공개", "무응답", "안알려줌",
+    "안알려주심", "안알려주셨음", "미기입", "확인불가", "개원예정", "신규개원",
+    "병원", "의원", "치과", "한의원", "안과", "피부과", "성형외과", "내과", "정형외과",
+}
+
+
 def _norm_name(v: str) -> str:
     return "".join(str(v).split()).lower()
+
+
+def _dup_name(v: str) -> str:
+    """중복 판정용 병원명. 실제 이름이 아닌 값은 빈 값으로 취급합니다."""
+    n = _norm_name(v)
+    return "" if n in PLACEHOLDER_NAMES or len(n) <= 1 else n
 
 
 def find_similar(phone: str = "", hospital: str = "", exclude_no: str = "") -> pd.DataFrame:
@@ -632,21 +653,57 @@ def find_similar(phone: str = "", hospital: str = "", exclude_no: str = "") -> p
 
 
 def duplicate_groups() -> pd.DataFrame:
-    """연락처 또는 병원명이 겹치는 DB들만 모아서 반환 (겹침 사유 포함)."""
+    """연락처 또는 병원명이 겹치는 DB들만 모아서 반환.
+    중복사유와 '어느 순번과 겹치는지'(중복상대)를 함께 넣고, 같은 묶음끼리 붙여서 정렬합니다."""
     db = load_db()
     if db.empty:
-        return db.assign(중복사유="")
+        return db.assign(중복사유="", 중복상대="")
     ph = db["연락처"].map(phone_digits)
-    nm = db["병원명"].map(_norm_name)
+    nm = db["병원명"].map(_dup_name)
     dup_ph = ph.duplicated(keep=False) & ph.ne("")
     dup_nm = nm.duplicated(keep=False) & nm.ne("")
     reason = pd.Series("", index=db.index)
     reason[dup_ph & dup_nm] = "연락처+병원명"
     reason[dup_ph & ~dup_nm] = "연락처"
     reason[~dup_ph & dup_nm] = "병원명"
+
+    # 같은 연락처 / 같은 병원명끼리 순번을 모아둠
+    mates = {}
+    for key_series, mask in ((ph, dup_ph), (nm, dup_nm)):
+        for _, grp in db[mask].groupby(key_series[mask]):
+            nos = list(grp["순번"])
+            for no in nos:
+                mates.setdefault(no, set()).update(n for n in nos if n != no)
+
+    # 연락처로 묶인 것과 병원명으로 묶인 것이 이어지면 한 묶음으로 (A-B, B-C → A·B·C)
+    group_of, groups = {}, []
+    for no in db["순번"]:
+        if no in group_of or no not in mates:
+            continue
+        stack, members = [no], set()
+        while stack:
+            cur = stack.pop()
+            if cur in members:
+                continue
+            members.add(cur)
+            stack.extend(mates.get(cur, ()))
+        gid = len(groups)
+        groups.append(members)
+        for mnum in members:
+            group_of[mnum] = gid
+
     out = db[dup_ph | dup_nm].copy()
     out["중복사유"] = reason[out.index]
-    return out
+    out["중복상대"] = out["순번"].map(
+        lambda n: ", ".join(sort_nos(mates.get(n, ()))))
+    out["_묶음"] = out["순번"].map(lambda n: group_of.get(n, 10**6))
+    out = out.sort_values(["_묶음", "순번"], key=lambda c: c if c.name == "_묶음" else _no_key(c))
+    return out.drop(columns=["_묶음"]).reset_index(drop=True)
+
+
+def sort_nos(nos) -> list:
+    """순번 목록을 번호 순으로 정렬."""
+    return sorted(nos, key=_no_num)
 
 
 def existing_notes() -> list:
