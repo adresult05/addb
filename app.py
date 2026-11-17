@@ -1,6 +1,7 @@
 import streamlit as st
 
 from utils import auth as A
+from utils import data as D
 from utils import config as C
 from utils import ui as UI
 
@@ -26,4 +27,12 @@ pages = [
 pg = st.navigation(pages)
 UI.sidebar_logo()
 A.sidebar_user()
-pg.run()
+try:
+    pg.run()
+except Exception as e:                      # 구글시트 호출 한도에 걸렸을 때
+    if not D.is_quota_error(e):
+        raise
+    st.warning("구글시트 요청이 잠깐 몰렸습니다. 10~20초 뒤 아래 버튼을 눌러주세요.\n\n"
+               "저장된 내용이 사라진 것은 아닙니다.", icon="⏳")
+    if st.button("다시 불러오기", type="primary"):
+        st.rerun()
