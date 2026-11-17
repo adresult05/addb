@@ -10,6 +10,7 @@
 """
 import random
 import time
+from functools import wraps
 import uuid
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -49,6 +50,9 @@ class CsvBackend:
         self.dir = data_dir
         self.db_path = data_dir / "db_master.csv"
         self.log_path = data_dir / "progress_log.csv"
+
+    def _drop_cache(self, *keys):
+        """CSV 모드는 캐시가 없습니다 (구글시트 쪽과 호출부를 맞추기 위한 빈 함수)."""
 
     def _ensure(self):
         if self.db_path.exists():
@@ -147,6 +151,7 @@ class CsvBackend:
         return pd.read_csv(p, dtype=str, encoding="utf-8-sig").fillna("")
 
     def create_event(self, name, schema, author):
+        self._drop_cache("events")
         import json
         eid = uuid.uuid4().hex[:8]
         columns = [c["name"] for c in schema]
@@ -173,6 +178,7 @@ class CsvBackend:
         return df[cols]
 
     def append_event_row(self, eid, columns, values: dict):
+        self._drop_cache(f"evrows_{eid}")
         df = self.read_event_rows(eid, columns)
         no = int(pd.to_numeric(df["순번"], errors="coerce").max()) + 1 if len(df) else 1
         row = {"순번": no, **{c: values.get(c, "") for c in columns},
@@ -181,6 +187,7 @@ class CsvBackend:
                                                                        encoding="utf-8-sig")
 
     def bulk_append_event_rows(self, eid, columns, rows: list) -> int:
+        self._drop_cache(f"evrows_{eid}")
         df = self.read_event_rows(eid, columns)
         start = int(pd.to_numeric(df["순번"], errors="coerce").max()) + 1 if len(df) else 1
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -195,6 +202,7 @@ class CsvBackend:
         sources[j] = 그 컬럼이 원래 어떤 컬럼이었는지(이름). None 이면 새 컬럼(빈 값).
         이름만 바꾼 컬럼은 데이터를 그대로 들고 가고, 삭제한 컬럼의 데이터만 사라집니다."""
         import json
+        self._drop_cache("events", f"evrows_{eid}")
         new_columns = [c["name"] for c in schema]
         reg = self.list_events()
         idx = reg.index[reg["이벤트ID"] == eid]
@@ -222,6 +230,33 @@ class CsvBackend:
             p.unlink()
 
 
+# ══ 구글시트 호출 한도 대응 ════════════════════════════════════
+# 구글 시트 API는 "1분에 읽기 60회" 같은 한도가 있습니다. 넘으면 429를 돌려주는데,
+# 그대로 두면 앱이 빨간 에러 화면으로 죽어버리므로 잠깐 쉬었다 다시 시도합니다.
+QUOTA_WAITS = (1.5, 3.0, 6.0)
+
+
+def is_quota_error(e) -> bool:
+    t = f"{type(e).__name__} {e}"
+    return any(k in t for k in ("429", "RESOURCE_EXHAUSTED", "Quota exceeded",
+                                "rate limit", "RATE_LIMIT"))
+
+
+def _with_retry(fn):
+    """호출 한도에 걸리면 잠깐 쉬었다 다시 시도 (최대 3번)."""
+    @wraps(fn)
+    def inner(*a, **kw):
+        for wait in QUOTA_WAITS:
+            try:
+                return fn(*a, **kw)
+            except Exception as e:
+                if not is_quota_error(e):
+                    raise
+                time.sleep(wait)
+        return fn(*a, **kw)
+    return inner
+
+
 # ══ 저장소 2) 구글시트 ══════════════════════════════════════════
 class SheetsBackend:
     name = "구글시트"
@@ -234,6 +269,34 @@ class SheetsBackend:
         self.names = {"db": cfg.get("master_worksheet", "DB마스터"), "log": cfg.get("log_worksheet", "진행로그")}
         self.cols = {"db": C.DB_COLUMNS, "log": C.LOG_COLUMNS}
         self._ws, self._cache = {}, {}
+        self._ws_by_name = {}      # 워크시트 핸들 캐시 (worksheet() 호출도 API 1회를 씀)
+        for m in ("read_db", "read_logs", "read_raw", "append_db", "append_logs",
+                  "update_db_many", "load_catalog", "save_catalog", "list_quotes",
+                  "upsert_quote", "delete_quote", "list_events", "create_event",
+                  "delete_event", "read_event_rows", "append_event_row",
+                  "bulk_append_event_rows", "update_event_columns"):
+            if hasattr(self, m):
+                setattr(self, m, _with_retry(getattr(self, m)))
+
+    # -- 같은 탭을 다시 열 때 API 호출을 아끼기 --
+    def _sheet(self, title):
+        ws = self._ws_by_name.get(title)
+        if ws is None:
+            ws = self._ws_by_name[title] = self.app_ss.worksheet(title)
+        return ws
+
+    # -- 조회 결과를 잠깐 들고 있기 (카탈로그·견적함·특별DB 목록 등) --
+    def _cached(self, key, loader, fresh=False):
+        hit = self._cache.get(key)
+        if hit and not fresh and time.time() - hit[0] < self.TTL:
+            return hit[1].copy() if hasattr(hit[1], "copy") else hit[1]
+        val = loader()
+        self._cache[key] = (time.time(), val)
+        return val.copy() if hasattr(val, "copy") else val
+
+    def _drop_cache(self, *keys):
+        for k in keys:
+            self._cache.pop(k, None)
 
     # -- 워크시트 확보 (없으면 생성, 헤더가 다르면 덮어쓰지 않고 중단) --
     def _get_ws(self, kind):
@@ -323,6 +386,9 @@ class SheetsBackend:
         return ws
 
     def load_catalog(self):
+        return self._cached("catalog", self._load_catalog)
+
+    def _load_catalog(self):
         ws = self._catalog_ws()
         vals = ws.get_all_values()
         if len(vals) < 2:
@@ -334,6 +400,7 @@ class SheetsBackend:
         return pd.DataFrame([r[:len(cols)] for r in rows], columns=cols)
 
     def save_catalog(self, df):
+        self._drop_cache("catalog")
         ws = self._catalog_ws()
         ws.clear()
         ws.update([C.CATALOG_COLS] + df[C.CATALOG_COLS].astype(str).values.tolist(), "A1",
@@ -353,12 +420,16 @@ class SheetsBackend:
         return ws
 
     def list_quotes(self):
+        return self._cached("quotes", self._list_quotes)
+
+    def _list_quotes(self):
         vals = self._quotes_ws().get_all_values()
         cols = C.QUOTE_HISTORY_COLS
         rows = [r + [""] * (len(cols) - len(r)) for r in vals[1:]]
         return pd.DataFrame([r[:len(cols)] for r in rows], columns=cols) if rows else pd.DataFrame(columns=cols)
 
     def upsert_quote(self, record: dict):
+        self._drop_cache("quotes")
         ws = self._quotes_ws()
         no_col = C.QUOTE_HISTORY_COLS.index("견적번호") + 1
         existing = ws.col_values(no_col)
@@ -370,6 +441,7 @@ class SheetsBackend:
             ws.append_rows([row_data], value_input_option="RAW")
 
     def delete_quote(self, qid: str):
+        self._drop_cache("quotes")
         ws = self._quotes_ws()
         id_col = C.QUOTE_HISTORY_COLS.index("견적ID") + 1
         ids = ws.col_values(id_col)
@@ -382,6 +454,8 @@ class SheetsBackend:
 
     def _registry_ws(self):
         cols = C.EVENT_REGISTRY_COLS
+        if self.EVENT_REGISTRY in self._ws_by_name:
+            return self._ws_by_name[self.EVENT_REGISTRY]
         try:
             ws = self.app_ss.worksheet(self.EVENT_REGISTRY)
             if not ws.row_values(1):
@@ -389,15 +463,20 @@ class SheetsBackend:
         except self.NotFound:
             ws = self.app_ss.add_worksheet(title=self.EVENT_REGISTRY, rows=200, cols=len(cols))
             ws.update([cols], "A1", value_input_option="RAW")
+        self._ws_by_name[self.EVENT_REGISTRY] = ws
         return ws
 
     def list_events(self):
+        return self._cached("events", self._list_events)
+
+    def _list_events(self):
         vals = self._registry_ws().get_all_values()
         cols = C.EVENT_REGISTRY_COLS
         rows = [r + [""] * (len(cols) - len(r)) for r in vals[1:]]
         return pd.DataFrame([r[:len(cols)] for r in rows], columns=cols) if rows else pd.DataFrame(columns=cols)
 
     def create_event(self, name, schema, author):
+        self._drop_cache("events")
         import json
         eid = uuid.uuid4().hex[:8]
         columns = [c["name"] for c in schema]
@@ -417,21 +496,26 @@ class SheetsBackend:
         return row.iloc[0]["시트명"]
 
     def read_event_rows(self, eid, columns):
-        ws = self.app_ss.worksheet(self._event_sheet_name(eid))
+        return self._cached(f"evrows_{eid}", lambda: self._read_event_rows(eid, columns))
+
+    def _read_event_rows(self, eid, columns):
+        ws = self._sheet(self._event_sheet_name(eid))
         cols = ["순번", *columns, "등록일시"]
         vals = ws.get_all_values()
         rows = [r + [""] * (len(cols) - len(r)) for r in vals[1:]]
         return pd.DataFrame([r[:len(cols)] for r in rows], columns=cols) if rows else pd.DataFrame(columns=cols)
 
     def append_event_row(self, eid, columns, values: dict):
-        ws = self.app_ss.worksheet(self._event_sheet_name(eid))
+        self._drop_cache(f"evrows_{eid}")
+        ws = self._sheet(self._event_sheet_name(eid))
         existing = [v for v in ws.col_values(1)[1:] if v.isdigit()]
         no = (max(map(int, existing)) if existing else 0) + 1
         ws.append_rows([[no, *[values.get(c, "") for c in columns],
                          datetime.now().strftime("%Y-%m-%d %H:%M:%S")]], value_input_option="RAW")
 
     def bulk_append_event_rows(self, eid, columns, rows: list) -> int:
-        ws = self.app_ss.worksheet(self._event_sheet_name(eid))
+        self._drop_cache(f"evrows_{eid}")
+        ws = self._sheet(self._event_sheet_name(eid))
         existing = [v for v in ws.col_values(1)[1:] if v.isdigit()]
         start = (max(map(int, existing)) if existing else 0) + 1
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -444,6 +528,7 @@ class SheetsBackend:
         """컬럼명/유형 추가·수정·삭제.
         sources[j] = 그 컬럼이 원래 어떤 컬럼이었는지(이름). None 이면 새 컬럼(빈 값)."""
         import json
+        self._drop_cache("events", f"evrows_{eid}")
         new_columns = [c["name"] for c in schema]
         reg = self.list_events()
         idx = reg.index[reg["이벤트ID"] == eid]
