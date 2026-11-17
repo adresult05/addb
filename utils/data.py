@@ -260,10 +260,14 @@ def _with_retry(fn):
 # ══ 저장소 2) 구글시트 ══════════════════════════════════════════
 class SheetsBackend:
     name = "구글시트"
-    TTL = 15   # 초. 조회 API 호출 횟수를 줄이기 위한 짧은 캐시 (쓰기 시 즉시 무효화)
+    # 조회 결과를 몇 초 동안 재사용할지. 앱에서 저장하면 그 즉시 새로 읽으므로,
+    # 이 시간은 "구글시트를 직접 고쳤을 때 앱에 반영되기까지"에만 영향을 줍니다.
+    # secrets 의 [gsheets] cache_seconds 로 조절할 수 있습니다.
+    TTL = 60
 
     def __init__(self, app_ss, raw_ss, cfg: dict, not_found_exc=Exception):
         self.app_ss, self.raw_ss, self.cfg, self.NotFound = app_ss, raw_ss, cfg, not_found_exc
+        self.TTL = int(cfg.get("cache_seconds", self.TTL) or self.TTL)
         self.import_from = str(cfg.get("import_from", "") or "")
         self.last_no = str(cfg.get("last_no", "") or "")   # 기존 시트의 마지막 순번 (예: "26-187") → 이 다음 번호부터 부여
         self.names = {"db": cfg.get("master_worksheet", "DB마스터"), "log": cfg.get("log_worksheet", "진행로그")}
@@ -376,6 +380,8 @@ class SheetsBackend:
     CATALOG_WS = "견적카탈로그"
 
     def _catalog_ws(self):
+        if self.CATALOG_WS in self._ws_by_name:
+            return self._ws_by_name[self.CATALOG_WS]
         try:
             ws = self.app_ss.worksheet(self.CATALOG_WS)
             if not ws.row_values(1):
@@ -383,6 +389,7 @@ class SheetsBackend:
         except self.NotFound:
             ws = self.app_ss.add_worksheet(title=self.CATALOG_WS, rows=200, cols=len(C.CATALOG_COLS))
             ws.update([C.CATALOG_COLS], "A1", value_input_option="RAW")
+        self._ws_by_name[self.CATALOG_WS] = ws
         return ws
 
     def load_catalog(self):
@@ -410,6 +417,8 @@ class SheetsBackend:
     QUOTES_WS = "견적함"
 
     def _quotes_ws(self):
+        if self.QUOTES_WS in self._ws_by_name:
+            return self._ws_by_name[self.QUOTES_WS]
         try:
             ws = self.app_ss.worksheet(self.QUOTES_WS)
             if not ws.row_values(1):
@@ -417,6 +426,7 @@ class SheetsBackend:
         except self.NotFound:
             ws = self.app_ss.add_worksheet(title=self.QUOTES_WS, rows=1000, cols=len(C.QUOTE_HISTORY_COLS))
             ws.update([C.QUOTE_HISTORY_COLS], "A1", value_input_option="RAW")
+        self._ws_by_name[self.QUOTES_WS] = ws
         return ws
 
     def list_quotes(self):
