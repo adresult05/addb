@@ -4,6 +4,7 @@ import streamlit as st
 
 from utils import auth as A
 from utils import data as D
+from utils import ui as UI
 
 
 def render():
@@ -124,7 +125,13 @@ def _event_view(eid: str, name: str):
         _simple_stats(df, cols)
 
     st.divider()
-    st.caption("행을 클릭하면 아래에서 내용을 고치거나 지울 수 있습니다.")
+    c1, c2 = st.columns([3, 1], vertical_alignment="center")
+    c1.caption("행을 클릭하면 아래에서 내용을 고치거나 지울 수 있습니다.")
+    with c2:
+        from datetime import date
+        safe = "".join(ch for ch in name if ch.isalnum() or ch in " _-").strip() or "특별DB"
+        UI.download_csv(df, f"{safe}_{date.today():%Y%m%d}.csv", key=f"dl_ev_{eid}",
+                        width="stretch", help="지금 이 이벤트에 등록된 항목 전체를 엑셀용 CSV로 받습니다.")
     ver = st.session_state.setdefault(f"evrow_ver_{eid}", 0)
     event = st.dataframe(df, hide_index=True, width="stretch", height=320,
                          on_select="rerun", selection_mode="single-row",
