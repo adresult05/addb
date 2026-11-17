@@ -202,7 +202,6 @@ class CsvBackend:
         sources[j] = 그 컬럼이 원래 어떤 컬럼이었는지(이름). None 이면 새 컬럼(빈 값).
         이름만 바꾼 컬럼은 데이터를 그대로 들고 가고, 삭제한 컬럼의 데이터만 사라집니다."""
         import json
-        self._drop_cache("events", f"evrows_{eid}")
         new_columns = [c["name"] for c in schema]
         reg = self.list_events()
         idx = reg.index[reg["이벤트ID"] == eid]
@@ -220,6 +219,7 @@ class CsvBackend:
         out.to_csv(self._event_data_path(eid), index=False, encoding="utf-8-sig")
         reg.at[i, "컬럼"] = json.dumps(schema, ensure_ascii=False)
         reg.to_csv(self._events_path(), index=False, encoding="utf-8-sig")
+        self._drop_cache("events", f"evrows_{eid}")
 
     def delete_event(self, eid):
         reg = self.list_events()
@@ -538,7 +538,6 @@ class SheetsBackend:
         """컬럼명/유형 추가·수정·삭제.
         sources[j] = 그 컬럼이 원래 어떤 컬럼이었는지(이름). None 이면 새 컬럼(빈 값)."""
         import json
-        self._drop_cache("events", f"evrows_{eid}")
         new_columns = [c["name"] for c in schema]
         reg = self.list_events()
         idx = reg.index[reg["이벤트ID"] == eid]
@@ -567,6 +566,8 @@ class SheetsBackend:
         ws.update([["순번", *new_columns, "등록일시"]] + new_rows, "A1", value_input_option="RAW")
         col_idx = C.EVENT_REGISTRY_COLS.index("컬럼") + 1
         self._registry_ws().update_cell(i + 2, col_idx, json.dumps(schema, ensure_ascii=False))
+        # 반드시 '쓴 뒤'에 비웁니다. 먼저 비우면 중간의 조회가 옛 값을 다시 캐시에 넣습니다.
+        self._drop_cache("events", f"evrows_{eid}")
 
     def delete_event(self, eid):
         reg = self.list_events()
