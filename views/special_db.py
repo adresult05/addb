@@ -124,7 +124,46 @@ def _event_view(eid: str, name: str):
         _simple_stats(df, cols)
 
     st.divider()
-    st.dataframe(df, hide_index=True, width="stretch")
+    st.caption("행을 클릭하면 아래에서 내용을 고치거나 지울 수 있습니다.")
+    ver = st.session_state.setdefault(f"evrow_ver_{eid}", 0)
+    event = st.dataframe(df, hide_index=True, width="stretch", height=320,
+                         on_select="rerun", selection_mode="single-row",
+                         key=f"ev_tbl_{eid}_{ver}")
+    rows = event.selection.rows
+    if rows:
+        _row_editor(eid, schema, df.iloc[rows[0]], ver)
+
+
+def _row_editor(eid, schema, row, ver):
+    no = row["순번"]
+    st.markdown(f"#### ✏️ {no}번 항목 수정")
+    key = f"evedit_{eid}_{ver}_{no}"
+    values = {}
+    cols = st.columns(2)
+    for i, c in enumerate(schema):
+        box = cols[i % 2]
+        cur = str(row.get(c["name"], "") or "")
+        if c["type"] == D.COL_SELECT and c["options"]:
+            opts = list(c["options"])
+            idx = opts.index(cur) if cur in opts else None
+            values[c["name"]] = box.selectbox(c["name"], opts, index=idx, placeholder="선택",
+                                              key=f"{key}_{c['name']}") or ""
+        else:
+            values[c["name"]] = box.text_input(c["name"], value=cur, key=f"{key}_{c['name']}")
+
+    b1, b2, b3 = st.columns([1, 1, 3], vertical_alignment="bottom")
+    if b1.button("💾 저장", type="primary", key=f"{key}_save", width="stretch"):
+        D.update_event_row(eid, no, values, A.current_user()["id"])
+        st.session_state[f"evrow_ver_{eid}"] = ver + 1
+        st.toast(f"{no}번 항목을 수정했습니다.", icon="✅")
+        st.rerun()
+    with b2.popover("🗑️ 삭제", width="stretch"):
+        st.warning(f"{no}번 항목을 지웁니다. 되돌릴 수 없어요.")
+        if st.button("정말 삭제", type="primary", key=f"{key}_del"):
+            D.delete_event_row(eid, no, A.current_user()["id"])
+            st.session_state[f"evrow_ver_{eid}"] = ver + 1
+            st.toast(f"{no}번 항목을 삭제했습니다.", icon="🗑️")
+            st.rerun()
 
 
 def _single_add(eid, schema):
