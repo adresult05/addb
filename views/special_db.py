@@ -13,7 +13,7 @@ def render():
 
     events = D.list_events()
     with st.expander("➕ 새 이벤트 만들기", expanded=events.empty):
-        _create_event_form()
+        _create_event_form(events)
 
     if events.empty:
         st.info("아직 만들어진 이벤트가 없습니다. 위에서 먼저 만들어주세요.")
@@ -25,11 +25,38 @@ def render():
     _event_view(events.iloc[idx]["이벤트ID"], events.iloc[idx]["이벤트명"])
 
 
-def _create_event_form():
+def _copy_columns_from(events):
+    """이전 이벤트의 컬럼을 그대로 가져옵니다 (6월세미나 → 9월세미나처럼 양식만 재사용)."""
+    if events is None or events.empty:
+        return
+    ver = st.session_state["ev_ver"]
+    c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
+    names = list(events["이벤트명"])
+    pick = c1.selectbox("이전 이벤트에서 컬럼 가져오기", ["(직접 만들기)"] + names,
+                        key=f"ev_copy_{ver}",
+                        help="항목은 그대로 두고 이름만 바꿔서 쓸 때 편합니다.")
+    if c2.button("가져오기", key=f"ev_copybtn_{ver}", width="stretch",
+                 disabled=(pick == "(직접 만들기)")):
+        src = events[events["이벤트명"] == pick].iloc[0]
+        schema = D.event_schema(src["이벤트ID"])
+        nxt = ver + 1                                  # 새 위젯 키로 갈아끼워야 값이 들어갑니다
+        st.session_state["ev_ver"] = nxt
+        st.session_state[f"ev_n_{nxt}"] = len(schema)
+        st.session_state[f"ev_name_{nxt}"] = ""
+        for i, col in enumerate(schema):
+            st.session_state[f"ev_col_{nxt}_{i}"] = col["name"]
+            st.session_state[f"ev_type_{nxt}_{i}"] = col["type"]
+            st.session_state[f"ev_opts_{nxt}_{i}"] = ", ".join(col["options"])
+        st.toast(f"'{pick}'의 컬럼 {len(schema)}개를 가져왔습니다. 이름만 바꿔서 만드세요.", icon="📋")
+        st.rerun()
+
+
+def _create_event_form(events=None):
     ver = st.session_state.setdefault("ev_ver", 0)
     n = st.session_state.setdefault(f"ev_n_{ver}", 3)
     W = [2.2, 1.2, 2.6]
 
+    _copy_columns_from(events)
     name = st.text_input("이벤트/세미나 이름 *", placeholder="예: 2026 하반기 개원세미나", key=f"ev_name_{ver}")
     st.caption("스프레드시트를 만든다고 생각하고 컬럼(항목)을 정해주세요. 유형을 '드롭다운'으로 하면 "
                "정해진 선택지 중에서 고르게 됩니다. 컬럼은 나중에도 추가·수정할 수 있어요.")
