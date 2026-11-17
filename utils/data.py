@@ -221,6 +221,21 @@ class CsvBackend:
         reg.to_csv(self._events_path(), index=False, encoding="utf-8-sig")
         self._drop_cache("events", f"evrows_{eid}")
 
+    def update_event_row(self, eid, columns, no, values: dict):
+        df = self.read_event_rows(eid, columns)
+        hit = df.index[df["순번"].astype(str) == str(no)]
+        if len(hit) == 0:
+            raise KeyError(f"{no}번 항목을 찾을 수 없습니다.")
+        for c in columns:
+            if c in values:
+                df.at[hit[0], c] = values[c]
+        df.to_csv(self._event_data_path(eid), index=False, encoding="utf-8-sig")
+
+    def delete_event_row(self, eid, columns, no):
+        df = self.read_event_rows(eid, columns)
+        df = df[df["순번"].astype(str) != str(no)]
+        df.to_csv(self._event_data_path(eid), index=False, encoding="utf-8-sig")
+
     def delete_event(self, eid):
         reg = self.list_events()
         reg = reg[reg["이벤트ID"] != eid]
@@ -278,7 +293,8 @@ class SheetsBackend:
                   "update_db_many", "load_catalog", "save_catalog", "list_quotes",
                   "upsert_quote", "delete_quote", "list_events", "create_event",
                   "delete_event", "read_event_rows", "append_event_row",
-                  "bulk_append_event_rows", "update_event_columns"):
+                  "bulk_append_event_rows", "update_event_columns",
+                  "update_event_row", "delete_event_row"):
             if hasattr(self, m):
                 setattr(self, m, _with_retry(getattr(self, m)))
 
@@ -533,6 +549,28 @@ class SheetsBackend:
         if data:
             ws.append_rows(data, value_input_option="RAW")
         return len(data)
+
+    def _event_row_index(self, ws, no):
+        """시트에서 그 순번이 몇 번째 줄인지 (헤더가 1줄)."""
+        nos = ws.col_values(1)
+        for i, v in enumerate(nos[1:], start=2):
+            if str(v).strip() == str(no).strip():
+                return i
+        raise KeyError(f"{no}번 항목을 찾을 수 없습니다.")
+
+    def update_event_row(self, eid, columns, no, values: dict):
+        ws = self._sheet(self._event_sheet_name(eid))
+        row_i = self._event_row_index(ws, no)
+        cur = ws.row_values(row_i)
+        ts = cur[1 + len(columns)] if len(cur) > 1 + len(columns) else ""
+        ws.update([[no, *[values.get(c, "") for c in columns], ts]], f"A{row_i}",
+                  value_input_option="RAW")
+        self._drop_cache(f"evrows_{eid}")
+
+    def delete_event_row(self, eid, columns, no):
+        ws = self._sheet(self._event_sheet_name(eid))
+        ws.delete_rows(self._event_row_index(ws, no))
+        self._drop_cache(f"evrows_{eid}")
 
     def update_event_columns(self, eid, schema: list, sources=None):
         """컬럼명/유형 추가·수정·삭제.
@@ -1014,6 +1052,16 @@ def load_event_rows(eid: str):
 def add_event_row(eid: str, values: dict, author: str = ""):
     cols = event_columns(eid)
     _backend().append_event_row(eid, cols, values)
+
+
+def update_event_row(eid: str, no, values: dict, author: str = ""):
+    """특별DB 항목 1건의 내용을 고칩니다."""
+    _backend().update_event_row(eid, event_columns(eid), no, values)
+
+
+def delete_event_row(eid: str, no, author: str = ""):
+    """특별DB 항목 1건을 지웁니다."""
+    _backend().delete_event_row(eid, event_columns(eid), no)
 
 
 def bulk_add_event_rows(eid: str, rows: list, author: str = "") -> int:
