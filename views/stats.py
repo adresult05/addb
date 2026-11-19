@@ -150,15 +150,37 @@ def render():
              .reindex(order, fill_value=0).rename_axis("담당부서").reset_index(name="DB수"))
         _fig(px.bar(g, x="담당부서", y="DB수", text_auto=True, color_discrete_sequence=BLUE))
     with b:
-        st.subheader("채널별 효율 (계약전환율)")
-        g = df.groupby("유입경로").agg(총=("순번", "count"),
-                                        계약=("진행상황", lambda s: (s == C.CONTRACT_DONE).sum()))
-        g["계약전환율(%)"] = (g["계약"] / g["총"] * 100).round(1)
-        g = g.reset_index().sort_values("계약전환율(%)", ascending=False)
-        _fig(px.bar(g, x="유입경로", y="계약전환율(%)", text_auto=True, color_discrete_sequence=BLUE))
+        st.subheader("매체별 DB수")
+        st.caption("유입경로 기준 — 어느 매체에서 DB가 많이 들어오는지")
+        g = (df["유입경로"].replace("", "미상").value_counts()
+             .rename_axis("유입경로").reset_index(name="DB수"))
+        g["비중(%)"] = (g["DB수"] / total * 100).round(1)
+        fig = px.bar(g, x="유입경로", y="DB수", text_auto=True,
+                     color_discrete_sequence=BLUE, custom_data=["비중(%)"])
+        fig.update_traces(hovertemplate="%{x}<br>%{y:,}건 · 전체의 %{customdata[0]}%<extra></extra>")
+        _fig(fig)
 
     c, d = st.columns(2, gap="large")
     with c:
+        st.subheader("매체별 계약전환율")
+        st.caption("계약완료 ÷ 해당 매체 DB수 — DB가 적은 매체는 비율이 크게 흔들립니다")
+        g = df.groupby(df["유입경로"].replace("", "미상")).agg(
+            DB수=("순번", "count"),
+            계약완료=("진행상황", lambda s: (s == C.CONTRACT_DONE).sum()))
+        g["계약전환율(%)"] = (g["계약완료"] / g["DB수"] * 100).round(1)
+        g = g.rename_axis("유입경로").reset_index().sort_values("계약전환율(%)", ascending=False)
+        fig = px.bar(g, x="유입경로", y="계약전환율(%)", text_auto=True,
+                     color_discrete_sequence=BLUE, custom_data=["DB수", "계약완료"])
+        fig.update_traces(hovertemplate="%{x}<br>%{y}%  "
+                                        "(계약 %{customdata[1]:,}건 ÷ DB %{customdata[0]:,}건)<extra></extra>")
+        _fig(fig)
+    with d:
+        st.subheader("진행상황별 분포")
+        g = df.groupby("진행상황").size().reindex(C.STATUSES, fill_value=0).reset_index(name="DB수")
+        _fig(px.bar(g, x="진행상황", y="DB수", text_auto=True, color_discrete_sequence=BLUE))
+
+    e, f = st.columns(2, gap="large")
+    with e:
         st.subheader(f"{unit} DB 추이")
         dt = pd.to_datetime(df["입력날짜"])
         if unit == "연별":
@@ -170,20 +192,14 @@ def render():
         g = key.value_counts().sort_index().reset_index()
         g.columns = ["기간", "DB수"]
         _fig(px.line(g, x="기간", y="DB수", markers=True, color_discrete_sequence=BLUE))
-    with d:
-        st.subheader("진행상황별 분포")
-        g = df.groupby("진행상황").size().reindex(C.STATUSES, fill_value=0).reset_index(name="DB수")
-        _fig(px.bar(g, x="진행상황", y="DB수", text_auto=True, color_discrete_sequence=BLUE))
-
-    e, f = st.columns(2, gap="large")
-    with e:
+    with f:
         st.subheader("지역별 DB수")
         g = df["병원소재지"].map(region_of).value_counts().rename_axis("지역").reset_index(name="DB수")
         _fig(px.bar(g, x="지역", y="DB수", text_auto=True, color_discrete_sequence=BLUE))
-    with f:
-        st.subheader("분과별 DB수")
-        g = df["분과"].replace("", "미상").value_counts().rename_axis("분과").reset_index(name="DB수")
-        _fig(px.bar(g, x="분과", y="DB수", text_auto=True, color_discrete_sequence=BLUE))
+
+    st.subheader("분과별 DB수")          # 분과 이름이 길어서 가로 전체를 씁니다
+    g = df["분과"].replace("", "미상").value_counts().rename_axis("분과").reset_index(name="DB수")
+    _fig(px.bar(g, x="분과", y="DB수", text_auto=True, color_discrete_sequence=BLUE))
 
     with st.expander("⬇️ 데이터 내보내기 (CSV)"):
         _export(df)
