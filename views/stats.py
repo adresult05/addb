@@ -104,7 +104,7 @@ def _range_filter(df):
 
 
 def render():
-    UI.page_header("애드리절트 DB 통계 대시보드")
+    UI.page_header("애드리절트 DB 통계")
     df = A.scope(D.load_db())
 
     admin = A.current_user()["role"] == "admin"
