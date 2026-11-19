@@ -712,9 +712,9 @@ def next_no(db: pd.DataFrame, year: int) -> str:
     return f"{yy}-{_seq_counters(db).get(yy, 0) + 1:03d}"
 
 
-def bulk_add_db(rows: list, author: str = "") -> int:
-    """과거 DB(Tally 사용 전 데이터 등)를 여러 건 한 번에 등록.
-    순번을 비워두면 자동 부여, 이미 쓰던 번호(예: 26-045)를 적어 넣으면 그 번호를 그대로 씁니다."""
+def bulk_add_db(rows: list, author: str = "", note: str = "과거 DB 일괄 등록") -> list:
+    """과거 DB(Tally 사용 전 데이터 등)를 여러 건 한 번에 등록. 반환: 부여된 순번 목록.
+    순번을 비워두면 받은 순서대로 자동 부여, 이미 쓰던 번호(예: 26-045)를 적어 넣으면 그 번호를 그대로 씁니다."""
     b = _backend()
     db = b.read_db(fresh=True)
     seq = _seq_counters(db)
@@ -741,10 +741,35 @@ def bulk_add_db(rows: list, author: str = "") -> int:
         row["등록경로"] = row["등록경로"] or "과거DB"
         new_rows.append(row)
         logs.append(_log_entry(no, row["입력날짜"] or str(date.today()), row["진행상황"],
-                               "과거 DB 일괄 등록", author, "등록"))
+                               note, author, "등록"))
     b.append_db(new_rows)
     b.append_logs(logs)
-    return len(new_rows)
+    return [r["순번"] for r in new_rows]
+
+
+def preview_duplicates(rows: list) -> list:
+    """일괄 등록 전 중복 확인. 줄마다 사유 문자열(겹치지 않으면 빈 문자열)을 돌려줍니다.
+    이미 등록된 DB와 겹치는 경우 + 올리려는 목록 안에서 겹치는 경우를 모두 봅니다."""
+    db = _backend().read_db()
+    phones = {phone_digits(p) for p in db["연락처"]} - {""}
+    names = {_dup_name(n) for n in db["병원명"]} - {""}
+    seen_p, seen_n, out = {}, {}, []
+    for i, r in enumerate(rows):
+        ph, nm, why = phone_digits(r.get("연락처", "")), _dup_name(r.get("병원명", "")), []
+        if ph and ph in phones:
+            why.append("연락처가 기존 DB와 같음")
+        if nm and nm in names:
+            why.append("병원명이 기존 DB와 같음")
+        if ph and ph in seen_p:
+            why.append(f"{seen_p[ph]}번째 줄과 연락처가 같음")
+        if nm and nm in seen_n:
+            why.append(f"{seen_n[nm]}번째 줄과 병원명이 같음")
+        if ph:
+            seen_p.setdefault(ph, i + 1)
+        if nm:
+            seen_n.setdefault(nm, i + 1)
+        out.append(" · ".join(why))
+    return out
 
 
 def update_note(no: str, text: str):
