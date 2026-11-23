@@ -104,7 +104,7 @@ def _range_filter(df):
 
 
 def render():
-    UI.page_header("애드리절트 DB 통계")
+    UI.page_header("애드리절트 DB 통계 대시보드")
     df = A.scope(D.load_db())
 
     admin = A.current_user()["role"] == "admin"
@@ -234,9 +234,11 @@ def _detail_stats(df, full_db):
 
 
 def _funnel_tab(df, logs):
-    st.caption(f"단계 순서: {' → '.join(C.FUNNEL_STAGES)} · "
-               f"{', '.join(C.FUNNEL_EXCLUDE)} 는 제외 · "
-               f"{', '.join(C.SIDE_STATUSES)} 는 단계 후퇴로 보지 않고 한 번 도달한 단계를 유지합니다.")
+    merged = [f"{k}({'+'.join(v)})" for k, v in C.FUNNEL_STAGE_STATUSES.items() if len(v) > 1]
+    st.caption(f"단계 순서: {' → '.join(C.FUNNEL_STAGES)}"
+               + (f" · {', '.join(merged)} 는 한 단계로 묶어서 봅니다" if merged else "")
+               + f" · {'·'.join(C.FUNNEL_EXCLUDE)} 제외"
+               + f" · {'·'.join(C.SIDE_STATUSES)}는 단계 후퇴로 보지 않고 한 번 도달한 단계를 유지합니다.")
     f = AN.funnel(df, logs)
     if f["도달"].iloc[0] == 0:
         st.info("계산할 DB가 없습니다.")
