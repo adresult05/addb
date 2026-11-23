@@ -7,7 +7,7 @@ import pandas as pd
 
 from utils import config as C
 
-STAGE_IDX = {s: i for i, s in enumerate(C.FUNNEL_STAGES)}
+STAGE_IDX = C.STAGE_OF      # 진행상황 → 단계 번호 (여러 진행상황이 한 단계일 수 있음)
 
 
 def _to_date(s: pd.Series) -> pd.Series:
