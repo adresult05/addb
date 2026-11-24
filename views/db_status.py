@@ -177,14 +177,14 @@ def _detail(no: str, user: dict):
             log_date = c1.date_input("날짜", value=date.today())
             cur = C.STATUSES.index(rec["진행상황"]) if rec["진행상황"] in C.STATUSES else 0
             status = c2.selectbox("진행상황", C.STATUSES, index=cur)
-            content = st.text_area("내용", height=100)
+            content = st.text_area("내용 (선택)", height=100,
+                                   placeholder="무슨 얘기를 했는지 적어두면 나중에 맥락을 알 수 있습니다. "
+                                               "비워두면 진행상황만 기록됩니다.")
             if st.form_submit_button("로그 저장", type="primary"):
-                if not content.strip():
-                    st.warning("내용을 입력해주세요.")
-                else:
-                    D.add_log(no, log_date, status, content.strip(), user["id"])
-                    st.toast(f"{no} · {status} 영업로그가 저장되었습니다.", icon="✅")
-                    st.rerun()
+                # 내용을 비우면 진행상황 이름을 대신 넣습니다. (히스토리에 빈 칸이 남지 않게)
+                D.add_log(no, log_date, status, content.strip() or status, user["id"])
+                st.toast(f"{no} · {status} 영업로그가 저장되었습니다.", icon="✅")
+                st.rerun()
 
         st.markdown("#### 진행 히스토리")
         logs = D.load_logs()
