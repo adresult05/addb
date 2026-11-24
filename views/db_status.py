@@ -181,8 +181,8 @@ def _detail(no: str, user: dict):
             cur = C.STATUSES.index(rec["진행상황"]) if rec["진행상황"] in C.STATUSES else 0
             status = c2.selectbox("진행상황", C.STATUSES, index=cur)
             content = st.text_area("내용 (선택)", height=100,
-                                   placeholder="무슨 얘기를 했는지 적어두면 나중에 맥락을 알 수 있습니다. "
-                                               "비워두면 진행상황만 기록됩니다.")
+                                   placeholder="비워두면 진행상황만 기록됩니다."
+                                               )
             if st.form_submit_button("로그 저장", type="primary"):
                 # 내용을 비우면 진행상황 이름을 대신 넣습니다. (히스토리에 빈 칸이 남지 않게)
                 D.add_log(no, log_date, status, content.strip() or status, user["id"])
