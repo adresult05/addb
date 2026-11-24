@@ -67,6 +67,9 @@ def render():
     st.title("DB 현황 / 영업로그")
 
     options = (["전체", C.UNASSIGNED] if user["role"] == "admin" else []) + A.visible_teams()
+    # 처음 들어오면 내 팀이 골라져 있게. (팀이 없는 계정이면 맨 앞 = '전체')
+    # 한 번 바꾸면 그 선택이 유지됩니다 — setdefault 라 덮어쓰지 않습니다.
+    st.session_state.setdefault("team_sel", user["team"] if user["team"] in options else options[0])
     team = st.radio("팀", options, horizontal=True, key="team_sel")
 
     db = D.load_db()
